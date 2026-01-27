@@ -1,0 +1,109 @@
+<!-- Dashboard Tab -->
+<div class="tab-pane fade" id="dashboard" role="tabpanel">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3 class="fw-bold mb-0">Application Tracker</h3>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addAppModal">
+            <i class="bi bi-plus-lg me-1"></i> Add Application
+        </button>
+    </div>
+
+    <!-- Kanban Board -->
+    <div class="row g-4" id="kanban-board">
+        <!-- Column: Saved -->
+        <div class="col-md-3">
+            <div class="bg-light rounded-3 p-3 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-bold text-secondary mb-0">Saved</h6>
+                    <span class="badge bg-white text-secondary shadow-sm rounded-pill">3</span>
+                </div>
+                <div class="kanban-column" id="col-saved">
+                    <!-- Cards injected by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Column: Applied -->
+        <div class="col-md-3">
+            <div class="bg-primary bg-opacity-10 rounded-3 p-3 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-bold text-primary mb-0">Applied</h6>
+                    <span class="badge bg-white text-primary shadow-sm rounded-pill">2</span>
+                </div>
+                <div class="kanban-column" id="col-applied">
+                    <!-- Cards injected by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Column: Interview -->
+        <div class="col-md-3">
+            <div class="bg-warning bg-opacity-10 rounded-3 p-3 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-bold text-warning mb-0">Interview</h6>
+                    <span class="badge bg-white text-warning shadow-sm rounded-pill">1</span>
+                </div>
+                <div class="kanban-column" id="col-interview">
+                    <!-- Cards injected by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Column: Offer -->
+        <div class="col-md-3">
+            <div class="bg-success bg-opacity-10 rounded-3 p-3 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-bold text-success mb-0">Offer/Hired</h6>
+                    <span class="badge bg-white text-success shadow-sm rounded-pill">1</span>
+                </div>
+                <div class="kanban-column" id="col-offer">
+                    <!-- Cards injected by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Application Modal -->
+<div class="modal fade" id="addAppModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header border-0 pb-0">
+                <h5 class="modal-title fw-bold">Track New Application</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <form id="addAppForm" onsubmit="handleAddApp(event)">
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-bold">Job Title</label>
+                        <input type="text" class="form-control bg-light border-0" id="appTitle" required
+                            placeholder="e.g. Senior AI Engineer">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-bold">Company</label>
+                        <input type="text" class="form-control bg-light border-0" id="appCompany" required
+                            placeholder="e.g. Google">
+                    </div>
+                    <div class="row g-3 mb-4">
+                        <div class="col-6">
+                            <label class="form-label text-muted small fw-bold">Location</label>
+                            <input type="text" class="form-control bg-light border-0" id="appLocation" required
+                                placeholder="e.g. Remote">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label text-muted small fw-bold">Status</label>
+                            <select class="form-select bg-light border-0" id="appStatus">
+                                <option value="saved">Saved</option>
+                                <option value="applied">Applied</option>
+                                <option value="interview">Interview</option>
+                                <option value="offer">Offer</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary rounded-pill fw-bold">Add to Tracker</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
