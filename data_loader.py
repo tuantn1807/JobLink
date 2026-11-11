@@ -30,25 +30,34 @@ print(f"HAS_FITZ: {HAS_FITZ}")
 print(f"HAS_PDFPLUMBER: {HAS_PDFPLUMBER}")
 print(f"HAS_OCR: {HAS_OCR}")
 
-def load_excel_file(file_path=None):
-    """Load job data from Excel file"""
+def load_excel_file(file_path=None, max_rows=None):
+    """Load job data from CSV or Excel file into unified DataFrame."""
     if file_path is None:
         cand = []
+        cand += glob.glob("data/*.csv")
+        cand += glob.glob("*.csv")
         cand += glob.glob("*.xlsx")
         cand += glob.glob("/mnt/data/*.xlsx")
         cand += glob.glob("/kaggle/working/*.xlsx")
         if not cand:
-            raise FileNotFoundError("No .xlsx file found. Place file in working directory.")
+            raise FileNotFoundError("No .csv or .xlsx job file found.")
         file_path = cand[0]
 
-    df_raw = pd.read_excel(file_path, engine='openpyxl').fillna("")
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".csv":
+        df_raw = pd.read_csv(file_path, dtype=str, nrows=max_rows).fillna("")
+    else:
+        df_raw = pd.read_excel(file_path, engine='openpyxl', nrows=max_rows).fillna("")
+
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
-    
+    if "Address detail" in df_raw.columns and COL["location_detail"] not in df_raw.columns:
+        df_raw[COL["location_detail"]] = df_raw["Address detail"]
+
     missing = [v for v in COL.values() if v not in df_raw.columns]
     if missing:
         raise ValueError(f"Missing columns in job file: {missing}")
 
-    df = pd.DataFrame({
+    data_dict = {
         "job_id": df_raw[COL["job_id"]].astype(str),
         "job_url": df_raw[COL["job_url"]].astype(str),
         "job_title": df_raw[COL["job_title"]].astype(str),
@@ -61,9 +70,22 @@ def load_excel_file(file_path=None):
         "job_desc": df_raw[COL["job_desc"]].astype(str),
         "job_type": df_raw[COL["job_type"]].astype(str),
         "benefit": df_raw[COL["benefit"]].astype(str),
-    }).reset_index(drop=True)
+    }
+
+    for extra_col in ["Industry", "Technical_Skills", "Soft_Skills", "Qualifications", "Source"]:
+        if extra_col in df_raw.columns:
+            data_dict[extra_col.lower()] = df_raw[extra_col].astype(str)
+        else:
+            data_dict[extra_col.lower()] = ""
+
+    df = pd.DataFrame(data_dict).reset_index(drop=True)
+    # Filter empty titles (e.g. blank rows from db_base.xlsx)
+    df = df[df["job_title"].str.strip() != ""].reset_index(drop=True)
 
     return file_path, df
+
+
+load_job_dataset = load_excel_file
 
 def extract_text_pymupdf(pdf_path, verbose=True):
     """Extract text from PDF using PyMuPDF"""

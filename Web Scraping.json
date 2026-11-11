@@ -1,0 +1,754 @@
+{
+  "name": "Web Scraping",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        16
+      ],
+      "id": "c198e6de-7695-412d-9b01-2cbd667e3ad6",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "formTitle": "x",
+        "formDescription": "x",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "x",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        160
+      ],
+      "id": "b860e17c-2d49-449f-94df-3e9deb63c6be",
+      "name": "On form submission",
+      "webhookId": "211938be-1394-4875-8ea4-177e71778498"
+    },
+    {
+      "parameters": {
+        "path": "493ff47f-ca9d-4d8c-a1ea-a25a05e89489",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        -112
+      ],
+      "id": "50194548-8878-4669-a7fb-21081de03a31",
+      "name": "Webhook",
+      "webhookId": "493ff47f-ca9d-4d8c-a1ea-a25a05e89489"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        16
+      ],
+      "id": "e6bef40c-89f9-4822-ada5-2b12b17ab646",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1616,
+        256
+      ],
+      "id": "63ee7a29-1275-4e22-b175-ce9f01e7193b",
+      "name": "Wait1",
+      "webhookId": "5b81a71d-977e-49de-aa97-982fa2a728a9"
+    },
+    {
+      "parameters": {
+        "url": "=https://app.scrapingbee.com/api/v1?api_key=0KUGF7IEHI95NFMIG8DJVKKKRZJJLFMCRUTK33ZJL61P0T4U4U94P7M7AHOO9JCWATDZPOPAF6IXA6ED&url={{ $json.job_url }}&block_ads=true&extract_rules={\"data\":\".job-detail__wrapper\"} ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1120,
+        32
+      ],
+      "id": "3724bf22-8b7f-4123-8664-1f147678a1fc",
+      "name": "HTTP Request Detail"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v2/scrape",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{{ $json.URL }}\",\n  \"formats\": [\"markdown\"],\n  \"onlyMainContent\": true\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        864,
+        -272
+      ],
+      "id": "4a36b6ed-c956-46a6-99a9-f86127b7935f",
+      "name": "HTTP Request2",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ucewqF1BP4p4xJWW",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1NLYkLXMcbHQ16--DnMRxDvS07i3zsHnKu8KLP_WNPRM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 666954737,
+          "mode": "list",
+          "cachedResultName": "cv_1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1NLYkLXMcbHQ16--DnMRxDvS07i3zsHnKu8KLP_WNPRM/edit#gid=666954737"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        -288
+      ],
+      "id": "83d13778-92d0-4ee1-a719-5d074fccc093",
+      "name": "Get row(s) in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "4BwxJa5BK79UMvX8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all();\nconst results = [];\nconst tracker = {}; \n\nfor (const item of allItems) {\n  const markdown = item.json.data?.markdown || item.json.content || \"\";\n  \n  // KIỂM TRA NẾU BỊ CHẶN:\n  if (markdown.includes(\"Phiên làm việc của bạn đã hết hạn\") || markdown.includes(\"reCAPTCHA\")) {\n      // Bạn có thể đẩy ra một thông báo lỗi để biết trang nào bị chặn\n      continue; \n  }\n\n  // 1. Lọc TopCV (Giữ nguyên vì đã chạy tốt)\n  const topcvRegex = /###\\s\\[[^\\]]+\\]\\((https:\\/\\/(www\\.)?topcv\\.vn\\/(viec-lam|brand\\/[^\\/]+\\/tuyen-dung)\\/[^\\s\\?)]+)/g;\n  let match;\n  while ((match = topcvRegex.exec(markdown)) !== null) {\n    let url = match[1].split('?')[0]; \n    if (!tracker[url]) {\n      tracker[url] = true;\n      results.push({ json: { job_url: url, site: \"TopCV\" } });\n    }\n  }\n\n  // 2. Lọc CareerLink (Sửa Regex để linh hoạt hơn)\n  // Giải thích: Bắt mọi thứ sau /viec-lam/ hoặc /job/ cho đến khi gặp dãy số ID ở cuối\n  const careerlinkRegex = /(https:\\/\\/www\\.careerlink\\.vn\\/(?:viec-lam|job)\\/[^\\s\\?)\\\"]+\\/\\d+)/g;\n  \n  let cMatch;\n  while ((cMatch = careerlinkRegex.exec(markdown)) !== null) {\n    let url = cMatch[0].split('?')[0];\n    // Loại bỏ dấu đóng ngoặc đơn nếu Regex vô tình bắt dính ở cuối link markdown\n    url = url.replace(/\\)$/, \"\"); \n\n    if (!tracker[url]) {\n      tracker[url] = true;\n      results.push({ json: { job_url: url, site: \"CareerLink\" } });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -272
+      ],
+      "id": "2a325265-f4e6-4b7a-b2b6-42a18ec59648",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        528,
+        -288
+      ],
+      "id": "69788894-d650-41c8-8501-90847f37abc5",
+      "name": "Loop Over Items3"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8",
+          "mode": "list",
+          "cachedResultName": "db_JobUrl",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 666954737,
+          "mode": "list",
+          "cachedResultName": "cv_1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8/edit#gid=666954737"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_url": "={{ $json.job_url }}",
+            "site": "={{ $json.site }}"
+          },
+          "matchingColumns": [
+            "job_url"
+          ],
+          "schema": [
+            {
+              "id": "job_url",
+              "displayName": "job_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "site",
+              "displayName": "site",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1376,
+        -272
+      ],
+      "id": "e8c1724e-d549-4410-8c8b-5d30a9943b3e",
+      "name": "Get Job Url and Append to Sheets2",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "4BwxJa5BK79UMvX8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1632,
+        -272
+      ],
+      "id": "19d5e380-f5fd-4755-82e0-a6139680ef94",
+      "name": "Wait3",
+      "webhookId": "5b81a71d-977e-49de-aa97-982fa2a728a9"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "14mLSXJOV8UExXotvZDcU2LJUnmY1SOURvuWMNDdl7fc",
+          "mode": "list",
+          "cachedResultName": "db_base",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/14mLSXJOV8UExXotvZDcU2LJUnmY1SOURvuWMNDdl7fc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1677685601,
+          "mode": "list",
+          "cachedResultName": "data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/14mLSXJOV8UExXotvZDcU2LJUnmY1SOURvuWMNDdl7fc/edit#gid=1677685601"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_title": "={{ $json.job_title }}",
+            "salary_min": "={{ $json.salary_min }}",
+            "salary_max": "={{ $json.salary_max }}",
+            "experience_years": "={{ $json.experience_years }}",
+            "job_level": "={{ $json.job_level }}",
+            "location_city": "={{ $json.location_city }}",
+            "company_name": "={{ $json.company_name }}",
+            "job_id": "={{ $json.job_id }}",
+            "category": "={{ $json.category }}",
+            "job_type": "={{ $json.job_type }}",
+            "skills": "={{ $json.skills }}",
+            "company_size": "={{ $json.company_size }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_level",
+              "displayName": "job_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "experience_years",
+              "displayName": "experience_years",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "salary_min",
+              "displayName": "salary_min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "salary_max",
+              "displayName": "salary_max",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_type",
+              "displayName": "job_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "skills",
+              "displayName": "skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "location_city",
+              "displayName": "location_city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company_name",
+              "displayName": "company_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company_size",
+              "displayName": "company_size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1456,
+        256
+      ],
+      "id": "bdfe581f-bc76-418b-b42e-03f21445fae7",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "4BwxJa5BK79UMvX8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Nhiệm vụ: Trích xuất thông tin từ danh sách các tin tuyển dụng dưới đây thành một mảng JSON.\n\nYêu cầu kỹ thuật:\n1. Trả về DUY NHẤT một mảng JSON (Array of Objects). Không có văn bản giải thích.\n2. Quy đổi lương: Nếu lương là USD, hãy nhân với 25,400 để ra VNĐ. Nếu là \"Thoả thuận\", để 0.\n3. Kỹ năng (Trường skills): CHỈ liệt kê các kỹ năng chuyên môn, công cụ phần mềm, ngôn ngữ lập trình, hoặc kiến thức nghiệp vụ đặc thù (Ví dụ: ReactJS, Figma, B2B Sales, SEO, SQL). \n   => LOẠI BỎ hoàn toàn các kỹ năng mềm như: giao tiếp, trung thực, nhiệt tình, làm việc nhóm, quản lý thời gian.\n\nCấu trúc các cột:\n- job_title: Tên vị trí tuyển dụng.\n- category: Ngành nghề chính.\n- job_level: Intern, Junior, Mid, hoặc Senior.\n- experience_years: Số năm kinh nghiệm (Chỉ lấy số, ví dụ: 1.5).\n- salary_min: Lương tối thiểu (VNĐ).\n- salary_max: Lương tối đa (VNĐ).\n- job_type: Full-time, Part-time hoặc Remote.\n- skills: Các kỹ năng chuyên môn, cách nhau bằng dấu phẩy.\n- location_city: Tỉnh/Thành phố.\n- company_name: Tên công ty.\n- company_size: Quy mô nhân sự (Ví dụ: 25-99).\n\nDữ liệu thô: \n{{ $json.data }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        992,
+        256
+      ],
+      "id": "ce9b5236-5d99-43da-b095-171bd3d1ccc7",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        992,
+        512
+      ],
+      "id": "f02686b9-3a10-46fc-9df0-29037ca6b82e",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "xYb0sKSxdrq5Z7cN",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        848,
+        256
+      ],
+      "id": "dbe8c138-a0fb-444d-9868-446061d4ea5a",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lấy ID cuối cùng từ node Google Sheets (đặt tên node đó là 'GetLastID')\nlet lastId = 0;\ntry {\n  lastId = parseInt($node[\"GetLastID\"].json[\"job_id\"]) || 0;\n} catch (e) {\n  lastId = 0;\n}\n\n// Lấy danh sách jobs mà AI vừa trả về (đã parse từ chuỗi JSON)\nconst aiOutput = JSON.parse($json.output.replace(/```json|```/g, \"\"));\n\nreturn aiOutput.map(job => {\n  lastId++; // Tự tăng ID\n  return {\n    json: {\n      job_id: lastId,\n      ...job\n    }\n  }\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        256
+      ],
+      "id": "0ec9939c-cb00-4979-ab63-159115481d1d",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8",
+          "mode": "list",
+          "cachedResultName": "db_JobUrl",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 666954737,
+          "mode": "list",
+          "cachedResultName": "cv_1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/11oipYEKSVTCmL_gXf0a79MARtu5yVzJ8hIq-gKCPxA8/edit#gid=666954737"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        0
+      ],
+      "id": "4950d73a-c968-4cfe-8742-4cb610f49924",
+      "name": "Get URL Job in Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "4BwxJa5BK79UMvX8",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 20,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        560,
+        0
+      ],
+      "id": "94663775-06bf-46f3-9c72-bab7ae8ece91",
+      "name": "Loop Over Items1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get URL Job in Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Detail": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Get Job Url and Append to Sheets2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items3": {
+      "main": [
+        [],
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job Url and Append to Sheets2": {
+      "main": [
+        [
+          {
+            "node": "Wait3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait3": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get URL Job in Sheets": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "5b61727f-2920-46f0-a89b-2090ce430f21",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fcd496dc5fb6ff4f8add6739adc644e8128181c6bea5306b99454ead838b291d"
+  },
+  "id": "6gsmUPX84s924ktH",
+  "tags": []
+}

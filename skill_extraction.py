@@ -36,20 +36,31 @@ for canon, aliases in SKILL_LEXICON.items():
 
 _skill_tfidf = TfidfVectorizer(analyzer='char_wb', ngram_range=(3,5), min_df=1)
 _skill_X = _skill_tfidf.fit_transform(_skill_texts)
+_skill_X_T = _skill_X.T.tocsc()
+_SKILL_FUZZY_CACHE = {}
+
+
+def _batch_canonical_match(phrases):
+    """Batch-compute and cache best canonical skill matches for phrases."""
+    uncached = [p for p in phrases if p and p not in _SKILL_FUZZY_CACHE]
+    if uncached:
+        vp = _skill_tfidf.transform(uncached)
+        sims = (vp @ _skill_X_T).toarray()
+        best_indices = sims.argmax(axis=1)
+        row_idx = range(len(uncached))
+        for i, p in zip(row_idx, uncached):
+            bi = int(best_indices[i])
+            _SKILL_FUZZY_CACHE[p] = (_skill_to_canon[bi], float(sims[i, bi]))
+
 
 def best_canonical_match(phrase: str):
-    """Find best canonical skill match using TF-IDF"""
+    """Find best canonical skill match using cached TF-IDF cosine similarity."""
     p = norm_text(phrase)
     if not p:
         return None, 0.0
-    vp = _skill_tfidf.transform([p])
-    sims = cosine_similarity(vp, _skill_X).ravel()
-    if sims.size == 0:
-        return None, 0.0
-    best_idx = int(sims.argmax())
-    best_score = float(sims[best_idx])
-    best_canon = _skill_to_canon[best_idx]
-    return best_canon, best_score
+    if p not in _SKILL_FUZZY_CACHE:
+        _batch_canonical_match([p])
+    return _SKILL_FUZZY_CACHE[p]
 
 def extract_skills_probabilistic(text: str, min_keep=MIN_KEEP_PROB):
     """Extract skills with probabilistic scoring"""
@@ -102,8 +113,8 @@ def weighted_skill_overlap_prob(user_prob: dict, job_prob: dict):
     contrib.sort(key=lambda x: x[1], reverse=True)
     return float(round(score, 3)), {"top_skill_contrib": contrib[:10]}
 
-def add_skillraw_nodes_and_links(G, owner_n, text, owner_rel_raw, fuzzy_threshold=0.78):
-    """Add skill raw nodes and links to graph"""
+def add_skillraw_nodes_and_links(G, owner_n, text, owner_rel_raw, fuzzy_threshold=0.78, include_fuzzy=True, add_to_graph=True):
+    """Add skill raw nodes and links to graph (with optional fuzzy matching)."""
     text_n = norm_text(text)
     raw2can_map = defaultdict(list)
     seen_raws = set()
@@ -115,42 +126,41 @@ def add_skillraw_nodes_and_links(G, owner_n, text, owner_rel_raw, fuzzy_threshol
             if phrase in seen_raws:
                 continue
 
-            raw_n = f"skillraw::{sid('raw', phrase)}"
-            can_n = f"skill::{sid('skill', canon)}"
-
-            G.add_node(raw_n, ntype="SkillRaw", label=phrase)
-            G.add_node(can_n, ntype="Skill", label=canon)
-
             p = 0.70 if norm_text(phrase) == norm_text(canon) else 0.45
-            G.add_edge(owner_n, raw_n, rel=owner_rel_raw)
-            G.add_edge(raw_n, can_n, rel="NORMALIZES_TO", prob=round(p, 3))
+            if add_to_graph:
+                raw_n = f"skillraw::{sid('raw', phrase)}"
+                can_n = f"skill::{sid('skill', canon)}"
+                G.add_node(raw_n, ntype="SkillRaw", label=phrase)
+                G.add_node(can_n, ntype="Skill", label=canon)
+                G.add_edge(owner_n, raw_n, rel=owner_rel_raw)
+                G.add_edge(raw_n, can_n, rel="NORMALIZES_TO", prob=round(p, 3))
 
             raw2can_map[phrase].append((canon, p))
             seen_raws.add(phrase)
 
-    # Fuzzy matching
-    words = [w for w in re.findall(r"\w+", text_n) if len(w) >= 3]
-    tokens = set(words)
-    tokens.update({f"{words[i]} {words[i+1]}" for i in range(len(words)-1)})
+    # Fuzzy matching (batched + cached)
+    if include_fuzzy:
+        words = [w for w in re.findall(r"\w+", text_n) if len(w) >= 3]
+        tokens = set(words)
+        tokens.update({f"{words[i]} {words[i+1]}" for i in range(len(words)-1)})
 
-    for phrase in tokens:
-        if phrase in seen_raws:
-            continue
+        cand_phrases = [p for p in tokens if p not in seen_raws]
+        _batch_canonical_match(cand_phrases)
 
-        canon, score = best_canonical_match(phrase)
-        if canon and score >= fuzzy_threshold:
-            raw_n = f"skillraw::{sid('raw', phrase)}"
-            can_n = f"skill::{sid('skill', canon)}"
+        for phrase in cand_phrases:
+            canon, score = _SKILL_FUZZY_CACHE[phrase]
+            if canon and score >= fuzzy_threshold:
+                p = round(0.35 * float(score) + 0.15, 3)
+                if add_to_graph:
+                    raw_n = f"skillraw::{sid('raw', phrase)}"
+                    can_n = f"skill::{sid('skill', canon)}"
+                    G.add_node(raw_n, ntype="SkillRaw", label=phrase)
+                    G.add_node(can_n, ntype="Skill", label=canon)
+                    G.add_edge(owner_n, raw_n, rel=owner_rel_raw)
+                    G.add_edge(raw_n, can_n, rel="NORMALIZES_TO", prob=p)
 
-            G.add_node(raw_n, ntype="SkillRaw", label=phrase)
-            G.add_node(can_n, ntype="Skill", label=canon)
-
-            p = round(0.35 * float(score) + 0.15, 3)
-            G.add_edge(owner_n, raw_n, rel=owner_rel_raw)
-            G.add_edge(raw_n, can_n, rel="NORMALIZES_TO", prob=p)
-
-            raw2can_map[phrase].append((canon, p))
-            seen_raws.add(phrase)
+                raw2can_map[phrase].append((canon, p))
+                seen_raws.add(phrase)
 
     raw2can_best = {}
     for raw_phrase, vals in raw2can_map.items():

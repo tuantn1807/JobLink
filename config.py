@@ -53,6 +53,30 @@ SKILL_LEXICON = {
     "Bookkeeping":   ["so sach", "bookkeeping"],
     "Financial Reporting": ["bao cao tai chinh", "financial reporting", "financial statement", "financial statements"],
     "Tax Finalization": ["quyet toan", "tax finalization"],
+    "HTML/CSS":      ["html", "css", "html5", "css3", "tailwind"],
+    "C#/.NET":       ["c#", ".net", "dotnet", "asp.net"],
+    "PHP":           ["php", "laravel", "symfony"],
+    "Spring":        ["spring", "spring boot", "springboot"],
+    "Flutter":       ["flutter", "dart"],
+    "Machine Learning": ["machine learning", "deep learning", "nlp", "computer vision", "ai"],
+    "PyTorch":       ["pytorch"],
+    "TensorFlow":    ["tensorflow", "keras"],
+    "Data Analysis": ["data analysis", "phan tich du lieu", "pandas", "numpy"],
+    "Power BI":      ["power bi", "powerbi"],
+    "Tableau":       ["tableau"],
+    "ERP":           ["erp", "odoo", "oracle"],
+    "IFRS":          ["ifrs", "vas"],
+    "Word":          ["ms word", "microsoft word", "word"],
+    "PowerPoint":    ["powerpoint", "power point"],
+    "Office Suite":  ["tin hoc van phong", "microsoft office", "ms office"],
+    "Photoshop":     ["photoshop", "adobe photoshop"],
+    "Illustrator":   ["illustrator", "adobe illustrator"],
+    "Canva":         ["canva"],
+    "AutoCAD":       ["autocad", "cad", "solidworks"],
+    "English":       ["tieng anh", "english", "ielts", "toeic"],
+    "Communication": ["giao tiep", "communication"],
+    "Negotiation":   ["dam phan", "negotiation"],
+    "Project Management": ["quan ly du an", "project management", "agile", "scrum"],
 }
 
 CORE_SKILLS_CANON = {"Excel", "Tax", "VAT", "Invoice", "Financial Reporting", "Audit", "SAP", "MISA", "AR/AP", "Bookkeeping"}
@@ -83,11 +107,18 @@ ROLE_PATTERNS = [
     (r"\bke toan noi bo\b|\binternal accountant\b", "Internal Accountant"),
     (r"\bke toan\b|\baccountant\b", "Accountant"),
     (r"\bkiem toan\b|\baudit\b", "Auditor"),
-    (r"\bfinance\b|\bfinancial\b", "Finance"),
-    (r"\bhr\b|\bnhan su\b", "HR"),
-    (r"\bsales\b|\bkinh doanh\b", "Sales"),
-    (r"\bdata\b", "Data"),
-    (r"\bdeveloper\b|\bengineer\b|\bsoftware\b", "Software Engineer"),
+    (r"\bfinance\b|\bfinancial\b|\btai chinh\b|\bngan hang\b", "Finance"),
+    (r"\bbusiness analyst\b|\bba\b", "Business Analyst"),
+    (r"\bdata\b|\bmachine learning\b|\bai\b", "Data"),
+    (r"\bbackend\b|\bfrontend\b|\bfullstack\b|\bdeveloper\b|\bengineer\b|\bsoftware\b|\blap trinh\b", "Software Engineer"),
+    (r"\bdesign\b|\bthiet ke\b|\bgraphic\b|\bui/ux\b", "Designer"),
+    (r"\bmarketing\b|\bseo\b|\bcontent\b|\btruyen thong\b", "Marketing"),
+    (r"\bhr\b|\bnhan su\b|\btuyen dung\b", "HR"),
+    (r"\bsales\b|\bkinh doanh\b|\bban hang\b", "Sales"),
+    (r"\bphap che\b|\blegal\b|\bluat\b", "Legal"),
+    (r"\bmua hang\b|\bprocurement\b|\blogistics\b|\bchuoi cung ung\b", "Supply Chain"),
+    (r"\bcham soc khach hang\b|\bcustomer service\b|\btu van\b", "Customer Service"),
+    (r"\bbao tri\b|\bky thuat\b|\bco khi\b|\bdien\b|\bvan hanh\b", "Engineering"),
 ]
 
 # ROLE SIMILARITY
@@ -96,6 +127,12 @@ ROLE_SIM = {
     ("Internal Accountant", "General Accountant"): 0.60,
     ("Accountant", "General Accountant"): 0.55,
     ("Accountant", "Tax Accountant"): 0.45,
+    ("Accountant", "Finance"): 0.45,
+    ("Data", "Software Engineer"): 0.45,
+    ("Business Analyst", "Data"): 0.50,
+    ("Business Analyst", "Software Engineer"): 0.40,
+    ("Marketing", "Sales"): 0.40,
+    ("Customer Service", "Sales"): 0.45,
 }
 
 # EXPERIENCE SIMILARITY
@@ -142,14 +179,31 @@ COL = {
 }
 
 # RDF CLASSES
-RDF_CLASSES = ["User","JobPosting","JobRoleCanonical","JobRoleRaw","Company","Location","ExperienceBucket","SalaryBucket","Skill","SkillRaw"]
+RDF_CLASSES = [
+    "User", "JobPosting", "JobRoleCanonical", "JobRoleRaw", "Company",
+    "Location", "ExperienceBucket", "SalaryBucket", "Skill", "SkillRaw",
+    "Industry", "Qualification"
+]
 
 # RDF OBJECT PROPERTIES
 RDF_OBJ_PROPS = [
-    "HAS_ROLE_CANONICAL","HAS_ROLE_RAW","POSTED_BY","LOCATED_IN",
-    "REQUIRES_EXP_BUCKET","HAS_SALARY_BUCKET","REQUIRES_SKILL",
-    "HAS_SKILL","MATCHES_JOB","SIMILAR_TO","NORMALIZES_TO","MENTIONS_SKILL_RAW"
+    "HAS_ROLE_CANONICAL", "HAS_ROLE_RAW", "POSTED_BY", "LOCATED_IN",
+    "REQUIRES_EXP_BUCKET", "HAS_SALARY_BUCKET", "REQUIRES_SKILL",
+    "HAS_SKILL", "MATCHES_JOB", "SIMILAR_TO", "NORMALIZES_TO",
+    "MENTIONS_SKILL_RAW", "BELONGS_TO_INDUSTRY", "REQUIRES_QUALIFICATION",
+    "CO_OCCURS_WITH"
 ]
+
+# LLM-ENHANCED HR KG + GNN CONFIGURATION
+DATASET_PATH = "data/jobs_dataset.csv"
+GNN_CHECKPOINT_PATH = "data/hr_kg_gnn.pt"
+LLM_CACHE_PATH = "data/llm_cache.json"
+MAX_JOBS_SERVING = 15000  # Subset cap for interactive Flask serving; train_gnn.py can train on more
+GNN_TEXT_DIM = 128
+GNN_HIDDEN_DIM = 128
+GNN_EPOCHS = 12
+GNN_LR = 2e-3
+MIN_COOCCUR_SUPPORT = 10
 
 # EVALUATION SETTINGS
 SAMPLE_N = 100

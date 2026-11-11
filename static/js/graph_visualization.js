@@ -9,7 +9,9 @@ const NODE_COLOR_MAP = {
     "ExperienceBucket": "#F48FB1",
     "SalaryBucket": "#BA68C8",
     "Skill": "#FFD54F",
-    "SkillRaw": "#FFEB3B"
+    "SkillRaw": "#FFEB3B",
+    "Industry": "#4DD0E1",
+    "Qualification": "#AED581"
 };
 
 // Important edges for highlighting (similar to nckh_group_2.py)
@@ -20,7 +22,10 @@ const IMPORTANT_EDGES = {
     "REQUIRES_SKILL": true,
     "LOCATED_IN": true,
     "POSTED_BY": true,
-    "HAS_ROLE_CANONICAL": true
+    "HAS_ROLE_CANONICAL": true,
+    "BELONGS_TO_INDUSTRY": true,
+    "REQUIRES_QUALIFICATION": true,
+    "CO_OCCURS_WITH": true
 };
 
 document.addEventListener('DOMContentLoaded', () => {

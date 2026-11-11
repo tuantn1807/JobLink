@@ -68,6 +68,8 @@ def clean_focus_layout(H, center_node):
     spread(groups.get("SalaryBucket", []),     ( 1.15, -0.60), 0.32, -1.2, -0.2)
     spread(groups.get("JobRoleCanonical", []), ( 0.95,  0.10), 0.25,  0.0,  0.0)
     spread(groups.get("JobRoleRaw", []),       ( 0.95, -0.15), 0.25,  0.0,  0.0)
+    spread(groups.get("Industry", []),         (-0.95, -0.75), 0.32,  3.4,  4.5)
+    spread(groups.get("Qualification", []),    ( 0.00,  1.25), 0.35,  0.8,  2.3)
     spread(groups.get("Skill", []),            ( 0.00,  0.00), 1.45,  0.0,  2 * math.pi)
 
     missing = [n for n in H.nodes if n not in pos]

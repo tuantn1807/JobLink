@@ -459,6 +459,11 @@ async function loadJobDetail(index) {
                 </div>
                 <div class="col-md-6">
                     <h5 class="mb-3">Score Breakdown</h5>
+                    ${detail.components.gnn !== undefined ? `
+                    <div class="progress mb-2" style="height: 10px;">
+                        <div class="progress-bar bg-primary" role="progressbar" style="width: ${(detail.components.gnn * 100)}%"></div>
+                    </div>
+                    <small class="d-block mb-2">GNN Semantic: ${(detail.components.gnn * 100).toFixed(1)}%</small>` : ''}
                     <div class="progress mb-2" style="height: 10px;">
                         <div class="progress-bar bg-success" role="progressbar" style="width: ${(detail.components.skill * 100)}%"></div>
                     </div>

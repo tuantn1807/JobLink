@@ -89,47 +89,51 @@ def build_job_job_similar_edges(G, valid_job_nodes, job_info, IDX, X):
     G.remove_edges_from(edges_to_remove)
 
     sim_edge_count = 0
+    batch_size = 512
+    n_jobs = len(valid_job_nodes)
 
-    for a_idx, j1 in enumerate(valid_job_nodes):
-        if j1 not in IDX:
-            continue
-            
-        v = X[a_idx]
-        sims = (v @ X.T).toarray().ravel()
-        sims[a_idx] = 0.0
+    for start in range(0, n_jobs, batch_size):
+        end = min(start + batch_size, n_jobs)
+        sim_block = (X[start:end] @ X.T).toarray()
 
-        # Get top candidates
-        if CANDIDATES_TOP < len(sims):
-            cand_pos = np.argpartition(-sims, CANDIDATES_TOP)[:CANDIDATES_TOP]
-        else:
-            cand_pos = np.arange(len(sims))
-
-        scored = []
-        for b_pos in cand_pos:
-            j2 = valid_job_nodes[b_pos]
-            if j1 == j2 or j2 not in job_info:
+        for offset, a_idx in enumerate(range(start, end)):
+            j1 = valid_job_nodes[a_idx]
+            if j1 not in IDX:
                 continue
 
-            s, ex = sim_score_job_job(j1, j2, job_info, IDX, X)
-            if s >= SIM_THRESHOLD:
-                scored.append((j2, s, ex))
+            sims = sim_block[offset]
+            sims[a_idx] = 0.0
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+            if CANDIDATES_TOP < len(sims):
+                cand_pos = np.argpartition(-sims, CANDIDATES_TOP)[:CANDIDATES_TOP]
+            else:
+                cand_pos = np.arange(len(sims))
 
-        # Add top TOPK_SIMILAR edges
-        for j2, s, ex in scored[:TOPK_SIMILAR]:
-            G.add_edge(j1, j2, rel="SIMILAR_TO", score=s, explain=ex)
-            G.add_edge(j2, j1, rel="SIMILAR_TO", score=s, explain=ex)
-            sim_edge_count += 2
+            scored = []
+            for b_pos in cand_pos:
+                j2 = valid_job_nodes[b_pos]
+                if j1 == j2 or j2 not in job_info:
+                    continue
+
+                s, ex = sim_score_job_job(j1, j2, job_info, IDX, X)
+                if s >= SIM_THRESHOLD:
+                    scored.append((j2, s, ex))
+
+            scored.sort(key=lambda x: x[1], reverse=True)
+
+            for j2, s, ex in scored[:TOPK_SIMILAR]:
+                G.add_edge(j1, j2, rel="SIMILAR_TO", score=s, explain=ex)
+                G.add_edge(j2, j1, rel="SIMILAR_TO", score=s, explain=ex)
+                sim_edge_count += 2
 
     return sim_edge_count
 
-def explain_user_job(user_prob, job_prob, user_raw2can=None, job_raw2can=None):
-    """Generate XAI explanation for user-job match"""
+def explain_user_job(user_prob, job_prob, user_raw2can=None, job_raw2can=None, G=None):
+    """Generate XAI explanation for user-job match (including 2-hop CO_OCCURS_WITH paths)."""
     if not job_prob:
         return {
             "components": {"skill_coverage": 0.0},
-            "evidence": {"matched_skills": [], "missing_skills": []},
+            "evidence": {"matched_skills": [], "missing_skills": [], "related_skills": []},
             "paths": []
         }
 
@@ -166,6 +170,24 @@ def explain_user_job(user_prob, job_prob, user_raw2can=None, job_raw2can=None):
     matched.sort(key=lambda x: x["contrib"], reverse=True)
     missing.sort(key=lambda x: x["job_prob"] * x["weight"], reverse=True)
 
+    related_skills = []
+    if G is not None and missing and user_prob:
+        from text_processing import sid
+        user_skill_nodes = {f"skill::{sid('skill', s)}": s for s in user_prob.keys()}
+        for m_item in missing[:8]:
+            m_sk = m_item["skill"]
+            m_node = f"skill::{sid('skill', m_sk)}"
+            if not G.has_node(m_node):
+                continue
+            for u_node, u_sk in user_skill_nodes.items():
+                if G.has_edge(u_node, m_node) and G.edges[u_node, m_node].get("rel") == "CO_OCCURS_WITH":
+                    related_skills.append({
+                        "user_skill": u_sk,
+                        "job_skill": m_sk,
+                        "weight": G.edges[u_node, m_node].get("score", 0.0),
+                    })
+                    break
+
     paths = []
     for m in matched[:5]:
         sk = m['skill']
@@ -194,21 +216,28 @@ def explain_user_job(user_prob, job_prob, user_raw2can=None, job_raw2can=None):
         else:
             paths.append(f"User → HAS_SKILL → {sk} → REQUIRED_BY → Job")
 
+    for rel_item in related_skills[:3]:
+        paths.append(
+            f"User → HAS_SKILL → {rel_item['user_skill']} → CO_OCCURS_WITH({rel_item['weight']}) → {rel_item['job_skill']} → REQUIRES_SKILL → Job"
+        )
+
     return {
         "components": {
             "skill_coverage": round(coverage, 3)
         },
         "evidence": {
             "matched_skills": matched,
-            "missing_skills": missing
+            "missing_skills": missing,
+            "related_skills": related_skills,
         },
         "paths": paths
     }
 
 def user_job_score(user_prob, user_city, user_detail, job_node, job_info, 
                    IDX, X, cv_vec, tfidf, user_role_can, user_exp_bucket,
-                   pseudo_text="", user_raw2can_best=None, user_raw2can_map=None):
-    """Calculate user-job match score"""
+                   pseudo_text="", user_raw2can_best=None, user_raw2can_map=None,
+                   gnn_score=None, G=None):
+    """Calculate hybrid HR KG + GNN user-job match score."""
     if job_node not in job_info:
         return 0.0, {"error": "job_not_in_job_info"}
 
@@ -223,8 +252,13 @@ def user_job_score(user_prob, user_city, user_detail, job_node, job_info,
     else:
         user_prob_max_raw = user_prob
 
-    xai = explain_user_job(user_prob_max_raw, job["prob_skills"], 
-                          user_raw2can=user_raw2can_map, job_raw2can=job.get('raw2can'))
+    # Merge direct prob & raw normalized prob so LLM/enriched skills aren't dropped
+    merged_user_prob = dict(user_prob or {})
+    for k, v in (user_prob_max_raw or {}).items():
+        merged_user_prob[k] = max(float(merged_user_prob.get(k, 0.0)), float(v))
+
+    xai = explain_user_job(merged_user_prob, job["prob_skills"], 
+                          user_raw2can=user_raw2can_map, job_raw2can=job.get('raw2can'), G=G)
     s_skill = xai["components"]["skill_coverage"]
     ex_skill = xai["evidence"]
 
@@ -249,26 +283,48 @@ def user_job_score(user_prob, user_city, user_detail, job_node, job_info,
     except:
         s_sal = 0.0
 
-    W = {
-        'skill': 0.35,
-        'text': 0.25,
-        'location': 0.15,
-        'role': 0.10,
-        'exp': 0.10,
-        'sal': 0.05,
-    }
-
-    score = (
-        W['skill'] * s_skill +
-        W['text'] * s_text +
-        W['location'] * s_loc +
-        W['role'] * s_role +
-        W['exp'] * s_exp +
-        W['sal'] * s_sal
-    )
+    if gnn_score is not None:
+        s_gnn = float(gnn_score)
+        W = {
+            'gnn': 0.30,
+            'skill': 0.25,
+            'text': 0.15,
+            'location': 0.12,
+            'role': 0.08,
+            'exp': 0.05,
+            'sal': 0.05,
+        }
+        score = (
+            W['gnn'] * s_gnn +
+            W['skill'] * s_skill +
+            W['text'] * s_text +
+            W['location'] * s_loc +
+            W['role'] * s_role +
+            W['exp'] * s_exp +
+            W['sal'] * s_sal
+        )
+    else:
+        s_gnn = 0.0
+        W = {
+            'skill': 0.35,
+            'text': 0.25,
+            'location': 0.15,
+            'role': 0.10,
+            'exp': 0.10,
+            'sal': 0.05,
+        }
+        score = (
+            W['skill'] * s_skill +
+            W['text'] * s_text +
+            W['location'] * s_loc +
+            W['role'] * s_role +
+            W['exp'] * s_exp +
+            W['sal'] * s_sal
+        )
 
     explain = {
         "components": {
+            "gnn": round(s_gnn, 3),
             "skill": round(s_skill, 3),
             "text": round(s_text, 3),
             "location": round(s_loc, 3),
@@ -279,11 +335,13 @@ def user_job_score(user_prob, user_city, user_detail, job_node, job_info,
         "evidence": {
             "skill": ex_skill,
             "location": ex_loc,
+            "paths": xai.get("paths", []),
         },
         "meta": {
             "user_city": user_city,
             "job_city": job["city"],
             "job_role": job["role_can"],
+            "job_industry": job.get("industry", "Khác"),
             "exp_bucket": job["exp_bucket"],
             "sal_bucket": job["sal_bucket"],
         }
@@ -293,17 +351,21 @@ def user_job_score(user_prob, user_city, user_detail, job_node, job_info,
 
 def compute_user_job_scores(job_nodes, job_info, user_prob, user_city, user_detail,
                             IDX, X, cv_vec, tfidf, user_role_can, user_exp_bucket,
-                            user_raw2can_best=None, user_raw2can_map=None):
-    """Compute scores for all jobs"""
+                            user_raw2can_best=None, user_raw2can_map=None,
+                            gnn_scores=None, G=None):
+    """Compute hybrid HR KG + GNN scores for all jobs."""
     scores = []
     valid_job_nodes = [j for j in job_nodes if j in job_info]
+    gnn_scores = gnn_scores or {}
 
     for j in valid_job_nodes:
         sc, ex = user_job_score(
             user_prob, user_city, user_detail, j, job_info,
             IDX, X, cv_vec, tfidf, user_role_can, user_exp_bucket,
             user_raw2can_best=user_raw2can_best,
-            user_raw2can_map=user_raw2can_map
+            user_raw2can_map=user_raw2can_map,
+            gnn_score=gnn_scores.get(j),
+            G=G,
         )
         scores.append((j, sc, ex))
 

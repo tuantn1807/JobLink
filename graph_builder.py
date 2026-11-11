@@ -14,10 +14,13 @@ from skill_extraction import (
     extract_skills_probabilistic, add_skillraw_nodes_and_links, _combine_probs
 )
 from config import (
-    CORE_SKILLS_CANON, RDF_CLASSES, RDF_OBJ_PROPS, 
-    TOPK_USER_JOB
+    CORE_SKILLS_CANON, RDF_CLASSES, RDF_OBJ_PROPS,
+    TOPK_USER_JOB, MIN_COOCCUR_SUPPORT
 )
+from llm_kg_enrichment import extract_qualifications_from_text, infer_industry_from_text
 import random
+import re
+from collections import Counter, defaultdict
 def init_rdf_graph():
     """Initialize RDF graph"""
     rdf = RDFGraph()
@@ -67,8 +70,8 @@ def add_edge(G: nx.DiGraph, u: str, v: str, rel: str, rdf=None, ex_ns=None, **pr
         if 'score' in props:
             rdf.add((_iri(ex_ns, u), ex_ns.score, Literal(props['score'], datatype=XSD.float)))
 
-def build_user_node(G, cv_text):
-    """Build user node from CV"""
+def build_user_node(G, cv_text, enriched=None):
+    """Build user node and HR KG links from CV (enhanced with LLM/semantic extraction)."""
     USER_ID = "user::cv_001"
     G.add_node(USER_ID, ntype="User", label="CV_User_001")
 
@@ -93,6 +96,24 @@ def build_user_node(G, cv_text):
         prev = user_prob.get(sk, 0.0)
         user_prob[sk] = round(_combine_probs([prev, p_raw]), 3)
 
+    if enriched:
+        for sk, p_llm in (enriched.get("skills") or {}).items():
+            prev = user_prob.get(sk, 0.0)
+            user_prob[sk] = round(max(prev, float(p_llm)), 3)
+        if enriched.get("city") and user_city == "Unknown":
+            user_city = enriched["city"]
+
+        ind = enriched.get("industry")
+        if ind and ind != "Khác":
+            ind_n = f"ind::{sid('ind', ind)}"
+            G.add_node(ind_n, ntype="Industry", label=ind)
+            G.add_edge(USER_ID, ind_n, rel="BELONGS_TO_INDUSTRY")
+
+        for q in (enriched.get("qualifications") or [])[:3]:
+            q_n = f"qual::{sid('qual', q)}"
+            G.add_node(q_n, ntype="Qualification", label=q)
+            G.add_edge(USER_ID, q_n, rel="REQUIRES_QUALIFICATION")
+
     for sk, p in user_prob.items():
         sk_n = f"skill::{sid('skill', sk)}"
         G.add_node(sk_n, ntype="Skill", label=sk)
@@ -101,15 +122,15 @@ def build_user_node(G, cv_text):
     u_loc_n = f"loc::{sid('loc', user_city)}"
     G.add_node(u_loc_n, ntype="Location", label=user_city)
     G.add_edge(USER_ID, u_loc_n, rel="LOCATED_IN", level="city")
-    
+
     return USER_ID, user_prob, user_city, user_detail, user_raw2can_map, user_raw2can_best
 
-def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None):
+def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None, fast_mode=False):
     """Build job nodes in the graph (and optionally RDF graph)."""
     job_nodes = []
     job_info = job_info or {}
 
-    for _, r in df.iterrows():
+    for r in df.to_dict("records"):
         jid = r["job_id"]
         title = r["job_title"]
         company = r["company"]
@@ -154,7 +175,9 @@ def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None):
         job_prob_raw, _ = extract_skills_probabilistic(job_text_full)
 
         raw2can_map, raw2can_best = add_skillraw_nodes_and_links(
-            G, job_n, job_text_full, owner_rel_raw="REQUIRES_SKILL_RAW"
+            G, job_n, job_text_full, owner_rel_raw="REQUIRES_SKILL_RAW",
+            include_fuzzy=not fast_mode,
+            add_to_graph=not fast_mode,
         )
 
         p_from_raw = {}
@@ -174,6 +197,22 @@ def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None):
             add_node(G, sk_n, "Skill", sk, rdf=rdf, ex_ns=ex_ns)
             add_edge(G, job_n, sk_n, "REQUIRES_SKILL", rdf=rdf, ex_ns=ex_ns, prob=p)
 
+        # Industry & Qualification HR KG enrichment
+        raw_ind = str(r.get("industry", "") or "").strip()
+        ind_list = [x.strip() for x in re.split(r"[,/;|]+", raw_ind) if x.strip()][:2] if raw_ind else []
+        if not ind_list:
+            ind_list = [infer_industry_from_text(f"{title} {job_text_full[:800]}")]
+        for ind_label in ind_list:
+            ind_n = f"ind::{sid('ind', ind_label)}"
+            add_node(G, ind_n, "Industry", ind_label, rdf=rdf, ex_ns=ex_ns)
+            add_edge(G, job_n, ind_n, "BELONGS_TO_INDUSTRY", rdf=rdf, ex_ns=ex_ns)
+
+        quals = extract_qualifications_from_text(job_text_full)
+        for q_label in quals[:3]:
+            q_n = f"qual::{sid('qual', q_label)}"
+            add_node(G, q_n, "Qualification", q_label, rdf=rdf, ex_ns=ex_ns)
+            add_edge(G, job_n, q_n, "REQUIRES_QUALIFICATION", rdf=rdf, ex_ns=ex_ns)
+
         job_info[job_n] = {
             "title": title,
             "company": company,
@@ -183,6 +222,8 @@ def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None):
             "sal_bucket": sal_b,
             "city": city,
             "detail": detail,
+            "industry": ind_list[0] if ind_list else "Khác",
+            "qualifications": quals,
             "prob_skills_raw": job_prob_raw,
             "prob_skills": job_prob,
             "raw2can": raw2can_map,
@@ -194,6 +235,41 @@ def build_job_nodes(G, df, job_info=None, rdf=None, ex_ns=None):
         }
 
     return job_nodes, job_info
+
+
+def build_skill_cooccurrence_edges(G, job_info, min_support=MIN_COOCCUR_SUPPORT, top_k_per_skill=5):
+    """Add symmetric CO_OCCURS_WITH edges between skills frequently appearing together."""
+    skill_counts = Counter()
+    pair_counts = Counter()
+
+    for info in job_info.values():
+        skills = sorted((info.get("prob_skills") or {}).keys())
+        for s in skills:
+            skill_counts[s] += 1
+        for i in range(len(skills)):
+            for j in range(i + 1, len(skills)):
+                pair_counts[(skills[i], skills[j])] += 1
+
+    per_skill = defaultdict(list)
+    for (s1, s2), cnt in pair_counts.items():
+        if cnt < min_support:
+            continue
+        jaccard = cnt / max(1, skill_counts[s1] + skill_counts[s2] - cnt)
+        per_skill[s1].append((s2, round(jaccard, 3), cnt))
+        per_skill[s2].append((s1, round(jaccard, 3), cnt))
+
+    added = 0
+    for s1, neighbors in per_skill.items():
+        neighbors.sort(key=lambda x: x[1], reverse=True)
+        n1 = f"skill::{sid('skill', s1)}"
+        if not G.has_node(n1):
+            continue
+        for s2, weight, cnt in neighbors[:top_k_per_skill]:
+            n2 = f"skill::{sid('skill', s2)}"
+            if G.has_node(n2) and not G.has_edge(n1, n2):
+                G.add_edge(n1, n2, rel="CO_OCCURS_WITH", score=weight, count=cnt)
+                added += 1
+    return added
 
 # def build_user_node(G, cv_text, rdf=None, ex_ns=None):
 #     """Build user node from CV (and optionally RDF graph)."""
@@ -251,7 +327,7 @@ def build_strict_user_job_graph(G, user_node, topk=3):
 
     # Add user's attributes
     for _, v, d in G.edges(user_node, data=True):
-        if d.get("rel") in ["HAS_SKILL", "LOCATED_IN"]:
+        if d.get("rel") in ["HAS_SKILL", "LOCATED_IN", "BELONGS_TO_INDUSTRY", "REQUIRES_QUALIFICATION"]:
             keep.add(v)
 
     # Add job attributes
@@ -263,7 +339,9 @@ def build_strict_user_job_graph(G, user_node, topk=3):
                 "HAS_SALARY_BUCKET",
                 "REQUIRES_EXP_BUCKET",
                 "HAS_ROLE_CANONICAL",
-                "POSTED_BY"
+                "POSTED_BY",
+                "BELONGS_TO_INDUSTRY",
+                "REQUIRES_QUALIFICATION",
             ]:
                 keep.add(v)
 

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Flask web application for NCKH job matching system"""
+"""Flask web application for LLM-Enhanced HR Knowledge Graph + GNN job matching system"""
 
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import json
+import pickle
 from werkzeug.utils import secure_filename
 import pandas as pd
 import numpy as np
@@ -11,20 +12,28 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 
 from config import (
-    TOPK_USER_JOB, CORE_SKILLS_CANON, SIM_THRESHOLD, 
-    CANDIDATES_TOP, TOPK_SIMILAR, MIN_KEEP_PROB
+    TOPK_USER_JOB, CORE_SKILLS_CANON, SIM_THRESHOLD,
+    CANDIDATES_TOP, TOPK_SIMILAR, MIN_KEEP_PROB,
+    DATASET_PATH, GNN_CHECKPOINT_PATH, MAX_JOBS_SERVING
 )
 from data_loader import load_excel_file, load_pdf_file, extract_all_text_from_pdf
 from text_processing import (
-    norm_text, infer_role_canonical, parse_year_range, exp_bucket, 
-    parse_location_city_detail, short_label
+    norm_text, infer_role_canonical, parse_year_range, exp_bucket,
+    parse_location_city_detail, short_label, parse_salary
 )
 from skill_extraction import extract_skills_probabilistic
 from graph_visualization import clean_focus_layout
-from graph_builder import build_job_nodes, build_user_node, init_rdf_graph, build_strict_user_job_graph,build_strict_user_job_graph
+from graph_builder import (
+    build_job_nodes, build_user_node, init_rdf_graph,
+    build_strict_user_job_graph, build_skill_cooccurrence_edges
+)
 from matching import compute_user_job_scores, explain_user_job, build_job_job_similar_edges
+from llm_kg_enrichment import enrich_hr_document, generate_interview_reply
+from gnn_model import HRGNNRuntime
 import networkx as nx
 from networkx.readwrite import json_graph
+
+KG_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'hr_kg_cache.pkl')
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
@@ -53,7 +62,78 @@ state = {
     'IDX': None,
     'cv_vec': None,
     'valid_job_nodes': None,
+    'base_G': None,
+    'gnn_runtime': None,
+    'cv_enrichment': None,
 }
+
+
+def _resolve_dataset_path():
+    """Find best available job dataset path (CSV preferred, fallback to Excel)."""
+    candidates = [
+        os.path.join(os.path.dirname(__file__), DATASET_PATH),
+        os.path.join(os.path.dirname(__file__), 'jobs_vietnamworks.xlsx'),
+        os.path.join(os.path.dirname(__file__), 'db_base.xlsx'),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _ensure_job_backend_loaded():
+    """Load precomputed KG + GNN checkpoint if available, else build from dataset."""
+    if state['gnn_runtime'] is None:
+        ckpt_path = os.path.join(os.path.dirname(__file__), GNN_CHECKPOINT_PATH)
+        state['gnn_runtime'] = HRGNNRuntime.load(ckpt_path)
+
+    if state['base_G'] is not None and state['job_nodes'] is not None:
+        return
+
+    if os.path.exists(KG_CACHE_PATH):
+        with open(KG_CACHE_PATH, 'rb') as f:
+            cache = pickle.load(f)
+        state['df'] = cache['df']
+        state['base_G'] = cache['G']
+        state['job_nodes'] = cache['job_nodes']
+        state['job_info'] = cache['job_info']
+        state['valid_job_nodes'] = cache['valid_job_nodes']
+        state['tfidf'] = cache['tfidf']
+        state['X'] = cache['X']
+        state['IDX'] = cache['IDX']
+        return
+
+    ds_path = _resolve_dataset_path()
+    if not ds_path:
+        raise FileNotFoundError('No job dataset found (expected data/jobs_dataset.csv or .xlsx).')
+
+    _, df = load_excel_file(ds_path, max_rows=MAX_JOBS_SERVING)
+    state['df'] = df
+
+    G = nx.DiGraph()
+    init_rdf_graph()
+    job_nodes, job_info = build_job_nodes(G, df, {})
+    build_skill_cooccurrence_edges(G, job_info)
+
+    valid_job_nodes = [j for j in job_nodes if j in job_info]
+    texts = [job_info[j]["text"] for j in valid_job_nodes]
+    tfidf = TfidfVectorizer(
+        analyzer="char_wb", ngram_range=(3, 5),
+        min_df=1, max_df=1.0, max_features=12000,
+        sublinear_tf=True, lowercase=True
+    )
+    X = normalize(tfidf.fit_transform(texts))
+    IDX = {j: i for i, j in enumerate(valid_job_nodes)}
+    if len(valid_job_nodes) <= 5000:
+        build_job_job_similar_edges(G, valid_job_nodes, job_info, IDX, X)
+
+    state['base_G'] = G
+    state['job_nodes'] = job_nodes
+    state['job_info'] = job_info
+    state['valid_job_nodes'] = valid_job_nodes
+    state['tfidf'] = tfidf
+    state['X'] = X
+    state['IDX'] = IDX
 
 @app.route('/')
 def index():
@@ -102,45 +182,39 @@ def salary_page():
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """Handle file uploads"""
+    """Handle CV PDF upload and score with LLM-Enhanced HR KG + GNN."""
     try:
         pdf_file = request.files.get('pdf_file')
 
-        # Check if PDF file is provided
         if not pdf_file:
             return jsonify({'error': 'PDF file required'}), 400
 
-        # Always use default Excel file
-        excel_path = os.path.join(os.path.dirname(__file__), 'db_job_tuan.xlsx')
-        if not os.path.exists(excel_path):
-            return jsonify({'error': 'Default job database (db_job_tuan.xlsx) not found'}), 400
+        _ensure_job_backend_loaded()
 
         # Save PDF temporarily
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(pdf_file.filename))
         pdf_file.save(pdf_path)
 
-        # Load data
-        _, df = load_excel_file(excel_path)
         cv_text = extract_all_text_from_pdf(pdf_path, verbose=False)
-
-        # Store in state
-        state['df'] = df
         state['cv_text'] = cv_text
 
-        # Initialize graph
-        G = nx.DiGraph()
-        rdf, EX = init_rdf_graph()
+        # LLM / semantic enrichment of uploaded CV
+        cv_enriched = enrich_hr_document(cv_text, doc_type="cv", use_llm=True)
+        state['cv_enrichment'] = cv_enriched
+
+        # Clone base Job KG so user uploads remain isolated
+        G = state['base_G'].copy()
         state['G'] = G
 
-        # Build job nodes
-        job_info = {}
-        job_nodes, job_info = build_job_nodes(G, df, job_info)
-        state['job_nodes'] = job_nodes
-        state['job_info'] = job_info
+        job_nodes = state['job_nodes']
+        job_info = state['job_info']
+        tfidf = state['tfidf']
+        X = state['X']
+        IDX = state['IDX']
 
-        # Build user node
+        # Build user node on KG
         USER_ID, user_prob, user_city, user_detail, user_raw2can_map, user_raw2can_best = \
-            build_user_node(G, cv_text)
+            build_user_node(G, cv_text, enriched=cv_enriched)
 
         state['USER_ID'] = USER_ID
         state['user_prob'] = user_prob
@@ -148,45 +222,43 @@ def upload_files():
         state['user_detail'] = user_detail
         state['user_raw2can_map'] = user_raw2can_map
         state['user_raw2can_best'] = user_raw2can_best
-        state['user_role_can'] = infer_role_canonical(cv_text)
-        user_exp_min, user_exp_max, _ = parse_year_range(cv_text)
-        state['user_exp_bucket'] = exp_bucket(user_exp_min, user_exp_max) if user_exp_min is not None else "Exp_Unknown"
 
-        # Build TF-IDF
-        valid_job_nodes = [j for j in job_nodes if j in job_info]
-        texts = [job_info[j]["text"] for j in valid_job_nodes]
-        
-        tfidf = TfidfVectorizer(
-            analyzer="char_wb", ngram_range=(3, 5),
-            min_df=1, max_df=1.0, max_features=12000,
-            sublinear_tf=True, lowercase=True
-        )
-        X = tfidf.fit_transform(texts)
-        X = normalize(X)
-        
-        state['tfidf'] = tfidf
-        state['X'] = X
-        state['IDX'] = {j: i for i, j in enumerate(valid_job_nodes)}
-        state['valid_job_nodes'] = valid_job_nodes
+        state['user_role_can'] = cv_enriched.get('canonical_role') or infer_role_canonical(cv_text)
+        state['user_exp_bucket'] = cv_enriched.get('exp_bucket') or "Exp_Unknown"
+        if state['user_exp_bucket'] == "Exp_Unknown":
+            user_exp_min, user_exp_max, _ = parse_year_range(cv_text)
+            state['user_exp_bucket'] = exp_bucket(user_exp_min, user_exp_max) if user_exp_min is not None else "Exp_Unknown"
 
         cv_vec = normalize(tfidf.transform([norm_text(cv_text)]))
         state['cv_vec'] = cv_vec
 
-        # Compute scores
+        # Inductive GNN embedding inference & scoring
+        gnn_scores = {}
+        gnn_runtime = state.get('gnn_runtime')
+        if gnn_runtime is not None:
+            user_emb = gnn_runtime.infer_user_embedding(
+                cv_text=cv_text,
+                user_skills=user_prob,
+                user_city=user_city,
+                user_role=state['user_role_can'],
+                user_exp=state['user_exp_bucket'],
+                user_industry=cv_enriched.get('industry', 'Khác'),
+                user_quals=cv_enriched.get('qualifications', []),
+            )
+            gnn_scores = gnn_runtime.score_jobs(user_emb, state['valid_job_nodes'])
+
+        # Compute hybrid HR KG + GNN scores
         scores = compute_user_job_scores(
             job_nodes, job_info, user_prob, user_city, user_detail,
-            state['IDX'], X, cv_vec, tfidf, state['user_role_can'], 
-            state['user_exp_bucket'], user_raw2can_best, user_raw2can_map
+            IDX, X, cv_vec, tfidf, state['user_role_can'],
+            state['user_exp_bucket'], user_raw2can_best, user_raw2can_map,
+            gnn_scores=gnn_scores, G=G
         )
         state['scores'] = scores
 
         # Add MATCHES_JOB edges to graph with scores
-        for job_node, score, explain in scores:
+        for job_node, score, explain in scores[:50]:
             G.add_edge(USER_ID, job_node, rel="MATCHES_JOB", score=round(score, 3))
-
-        # Build SIMILAR_TO edges between jobs using collab.py logic
-        sim_edge_count = build_job_job_similar_edges(G, valid_job_nodes, job_info, state['IDX'], X)
-        print(f"Added {sim_edge_count} SIMILAR_TO edges between jobs")
 
         # Clean up uploaded PDF file
         os.remove(pdf_path)
@@ -196,7 +268,10 @@ def upload_files():
             'jobs_count': len(job_nodes),
             'skills_detected': len(user_prob),
             'user_city': user_city,
-            'user_role': state['user_role_can']
+            'user_role': state['user_role_can'],
+            'user_industry': cv_enriched.get('industry', 'Khác'),
+            'extraction_provider': cv_enriched.get('provider', 'local_semantic_fallback'),
+            'gnn_active': gnn_runtime is not None,
         })
 
     except Exception as e:
@@ -246,18 +321,22 @@ def job_detail(job_id):
 
         xai = explain_user_job(user_prob_max_raw, job_prob, 
                               user_raw2can=state['user_raw2can_map'], 
-                              job_raw2can=job_info.get('raw2can'))
+                              job_raw2can=job_info.get('raw2can'),
+                              G=state.get('G'))
 
         detail = {
             'title': job_info['title'],
             'company': job_info.get('company', 'N/A'),
             'city': job_info['city'],
+            'industry': job_info.get('industry', 'Khác'),
             'url': job_info['url'],
             'score': sc,
             'components': ex['components'],
             'skill_coverage': f"{xai['components']['skill_coverage']*100:.1f}%",
             'matched_skills': xai['evidence']['matched_skills'][:10],
             'missing_skills': xai['evidence']['missing_skills'][:10],
+            'related_skills': xai['evidence'].get('related_skills', [])[:5],
+            'paths': xai.get('paths', [])[:6],
         }
 
         return jsonify(detail)
@@ -429,26 +508,17 @@ def process_graph(H, center_node, max_nodes=200):
 
 @app.route('/interview/chat', methods=['POST'])
 def interview_chat():
-    """Mock AI Interview Endpoint"""
-    # In a real scenario, this would call OpenAI/Gemini/Claude
-    data = request.json
-    user_msg = data.get('message', '').lower()
-    
-    # Simple rule-based logic for demo
-    if 'intro' in user_msg or 'myself' in user_msg:
-        reply = "Thank you. That's a strong background. What specific experience do you have with Python and Flask?"
-    elif 'python' in user_msg or 'flask' in user_msg:
-        reply = "Excellent. Can you describe a challenging bug you encountered in a recent project and how you solved it?"
-    elif 'bug' in user_msg or 'solve' in user_msg:
-        reply = "Problem-solving is key. Now, how do you handle tight deadlines and pressure in a team environment?"
-    elif 'deadline' in user_msg or 'pressure' in user_msg:
-        reply = "That's good to hear. Do you have any questions for us about the company or the role?"
-    else:
-        reply = "That's interesting. Could you elaborate a bit more on that point?"
-
-    import time
-    time.sleep(1.5) # Simulate AI thinking
-    
+    """LLM-enhanced AI Interview Endpoint (with contextual rule-based fallback)."""
+    data = request.json or {}
+    user_msg = data.get('message', '')
+    top_jobs = []
+    if state.get('scores') and state.get('job_info'):
+        top_jobs = [
+            {'title': state['job_info'][j]['title']}
+            for j, _, _ in state['scores'][:3]
+            if j in state['job_info']
+        ]
+    reply = generate_interview_reply(user_msg, user_skills=state.get('user_prob'), top_jobs=top_jobs)
     return jsonify({'reply': reply})
 
 @app.route('/api/salary-estimate', methods=['POST'])
@@ -496,41 +566,16 @@ def salary_estimate():
             'note': 'No matching data found.'
         })
 
-    # 3. Parse Salaries
-    # Expected formats: "10 - 20 triệu", "Up to 3000 USD", "Thỏa thuận"
+    # 3. Parse Salaries via shared text_processing.parse_salary
     salaries = []
-    
-    import re
-    
-    def parse_salary_str(s):
-        s = str(s).lower().strip()
-        if not s or 'thỏa thuận' in s:
-            return None
-            
-        # Detect currency
-        is_usd = 'usd' in s or '$' in s
-        scale = 25000 if is_usd else 1000000 # Convert all to VND for calc
-        
-        # Extract numbers
-        nums = re.findall(r'(\d+[.,]?\d*)', s.replace('.', '').replace(',', ''))
-        nums = [float(n) for n in nums]
-        
-        if not nums:
-            return None
-            
-        if len(nums) == 1:
-             val = nums[0] * scale
-             return (val, val)
-        elif len(nums) >= 2:
-             v1 = nums[0] * scale
-             v2 = nums[1] * scale
-             return (v1, v2)
-        return None
-
     for s_str in subset['salary']:
-        parsed = parse_salary_str(s_str)
-        if parsed:
-            salaries.append(parsed)
+        lo, hi, cur, nego = parse_salary(s_str)
+        if nego or lo is None or hi is None:
+            continue
+        if cur == 'USD':
+            salaries.append((lo * 25000, hi * 25000))
+        else:
+            salaries.append((lo, hi))
             
     if not salaries:
          return jsonify({
@@ -565,28 +610,14 @@ def salary_estimate():
     })
 
 if __name__ == '__main__':
-    # Load DB on start if exists
     try:
-        excel_path = os.path.join(os.path.dirname(__file__), 'db_job_tuan.xlsx')
-        if os.path.exists(excel_path):
-            print("Loading DB...")
-            _, df = load_excel_file(excel_path)
-            
-            # OPTIMIZATION: Limit to 50 rows for demo speed
-            print(f"Original DB size: {len(df)}")
-            if len(df) > 50:
-                print("Limiting to 50 rows for faster startup...")
-                df = df.head(50)
-            
-            state['df'] = df
-            
-            # Build Graph
-            G = nx.DiGraph()
-            init_rdf_graph()
-            state['G'] = G
-            build_job_nodes(G, df, {})
-            print("DB Loaded.")
+        print("Initializing HR Knowledge Graph + GNN backend...")
+        _ensure_job_backend_loaded()
+        print(
+            f"Loaded {len(state['job_nodes'])} jobs | "
+            f"GNN active: {state['gnn_runtime'] is not None}"
+        )
     except Exception as e:
-        print(f"Error loading DB on start: {e}")
+        print(f"Error loading backend on start: {e}")
 
     app.run(debug=True, host='0.0.0.0', port=5000)

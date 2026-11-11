@@ -10,3 +10,6 @@ pdfplumber
 pytesseract
 Pillow
 Werkzeug
+requests
+torch
+torch_geometric

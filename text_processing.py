@@ -5,6 +5,7 @@ import unicodedata
 import re
 import hashlib
 from collections import defaultdict
+from functools import lru_cache
 from config import SKILL_LEXICON, SECTION_HINTS, SECTION_WEIGHT, DETAIL_CUES, VN_CITY_ALIASES, ROLE_PATTERNS, MIN_KEEP_PROB
 
 # TEXT HELPERS
@@ -14,6 +15,7 @@ def norm_text(t):
         return ""
     s = unicodedata.normalize("NFKD", str(t).lower())
     s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.replace("đ", "d")
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -28,18 +30,14 @@ def short_label(text, maxlen=30):
     s = re.sub(r"\s+", " ", str(text)).strip()
     return s if len(s) <= maxlen else s[:maxlen-1] + "…"
 
+@lru_cache(maxsize=65536)
 def sid(prefix: str, raw: str, n=8):
-    """Create stable identifier with hash"""
+    """Create stable deterministic identifier with MD5 hash"""
     raw = "" if raw is None else str(raw)
     base = norm_text(raw)
     h = hashlib.md5(base.encode("utf-8")).hexdigest()[:n]
     slug = re.sub(r"[^a-z0-9]+", "_", base).strip("_")
     return f"{prefix}_{slug}_{h}"
-
-# Fix: Ensure `sid` function is defined
-def sid(prefix, value):
-    """Generate a unique identifier with a prefix."""
-    return f"{prefix}_{hash(value)}"
 
 # LOCATION PARSING
 def parse_location_city_detail(text: str):
@@ -199,13 +197,29 @@ def parse_salary(text):
         return None, None, cur, False
 
     def to_num(x):
-        x = x.replace(",", "")
-        v = float(x)
+        x = x.strip(".,")
+        if not x:
+            return None
+        # Thousands-grouped numbers like '15.000.000', '15,000,000', '500.000'
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", x):
+            x = x.replace(".", "")
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3})+", x):
+            x = x.replace(",", "")
+        else:
+            x = x.replace(",", ".")
+            if x.count(".") > 1:
+                x = x.replace(".", "")
+        try:
+            v = float(x)
+        except ValueError:
+            return None
         if cur == "VND" and v < 1000:
             v *= 1_000_000
         return int(v)
 
-    vals = [to_num(x) for x in nums[:2]]
+    vals = [v for v in (to_num(x) for x in nums[:2]) if v is not None]
+    if not vals:
+        return None, None, cur, False
     if len(vals) == 1:
         return vals[0], vals[0], cur, False
 
@@ -230,6 +244,12 @@ def salary_bucket_general(lo, hi, cur, nego):
     return "Salary_40M_plus"
 
 # SKILL SECTION PARSING
+_NORM_SECTION_HINTS = {
+    sec: [norm_text(k) for k in keys]
+    for sec, keys in SECTION_HINTS.items()
+}
+
+
 def split_cv_sections(cv_text: str):
     """Split CV into sections"""
     raw = str(cv_text or "")
@@ -238,9 +258,8 @@ def split_cv_sections(cv_text: str):
     cur = "unknown"
 
     def is_heading(line_norm: str):
-        for sec, keys in SECTION_HINTS.items():
-            for k in keys:
-                kn = norm_text(k)
+        for sec, keys in _NORM_SECTION_HINTS.items():
+            for kn in keys:
                 if line_norm == kn or line_norm.startswith(kn + ":"):
                     return sec
         return None
